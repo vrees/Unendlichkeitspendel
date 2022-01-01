@@ -39,7 +39,7 @@ byte PauseAtTransit = 0;
 
 void setup() 
 {
-  long CoilATouches[7];
+  long CoilATouches[8];
   DDRB = 0x2F;    // Motor und LED sind output
   DDRD = 0x0C;    // Tasten sind input, Spulen output
   PORTD = 0x60;   // Pullups für die Tasten
