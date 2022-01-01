@@ -9,8 +9,8 @@
 #define COIL_MIDDLE_COMPENSATION 85
 #define MOTOR_TIMER_VALUE 0   // Wenn bekannt: Wert hier eintragen
 
- #define Monitor
-// #define Plotter
+#define Monitor
+#define Plotter
 
 void stepper();       // ISR für den Schrittmotor
 byte CheckButtons();  // Tasten eingabe
@@ -36,26 +36,39 @@ byte Shutdown = 0;
 byte PauseAtTransit = 0;
 
 void setup() 
-{
+{   
   long CoilATouches[7];
   DDRB = 0x2F;    // Motor und LED sind output
   DDRD = 0x0C;    // Tasten sind input, Spulen output
   PORTD = 0x60;   // Pullups für die Tasten
 
   Serial.begin(9600);
+//   Serial.println("setup - Begin");
+  
   MeanCoilA = analogRead(A0);   // Ruhe-Spulenspannung
   MeanCoilB = analogRead(A1);
- 
-  while (analogRead(A0) < (MeanCoilA + 8))  
+
+  printMainCoils(MeanCoilA, MeanCoilB);
+
+  int valA = analogRead(A0);
+//  while (valA < (MeanCoilA + 8))  
+   while (1) 
   {       // Loch-Justage möglich, bis zum ersten Spulen Transit
     delay(3);
     CheckButtons();
+    printMainCoils(valA, 0);
+    valA = analogRead(A0);
   }
+  
+  // Serial.println("setup - Step 1 done");
 
   for (int i=0; i<8; i++)
   {
+    int valB = analogRead(A1);
     while (analogRead(A1) < (MeanCoilB + 8))  
     { // Magnet ist über CoilA
+         printMainCoils(0, valB);
+         valB = analogRead(A1);
     }
     CoilATouches[i]=millis();
     while (analogRead(A1) > (MeanCoilB - 8))  
@@ -63,8 +76,10 @@ void setup()
     }
   }
   Period = (CoilATouches[6] - CoilATouches[2])>>1;  // Periode abschätzen
- 
-  
+
+  // Serial.println("setup - Step 2 done");
+
+
   if (MotorTimerValue == 0)
     MotorTimerValue = ((long)Period * 2000)/(512 + PauseAtTransit - 1);
   else              
@@ -324,3 +339,12 @@ byte CheckButtons()
   return (bool)button1 + (bool)button2; // 0: no press, 1: one key, 2: both keys
 }
 
+void printMainCoils(int a, int b) 
+{
+#ifdef Monitor
+  Serial.print("MeanCoil A/B: ");
+  Serial.print(a);
+  Serial.print(" / ");
+  Serial.println(b);
+#endif
+}
