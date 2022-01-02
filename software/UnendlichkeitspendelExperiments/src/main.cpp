@@ -7,7 +7,8 @@
 #define PinCoilB 3
 #define LED 13
 #define LOOP_DELAY 3
-#define COIL_ON_TIME 100
+#define COIL_ON_TIME 5000
+#define OUTER_PENDEL_DELAY 150
 #define COIL_RELAX_TIME 250
 #define MOTOR_START_POS 360 // so wählen, dass comparePosition ~250 ist
 #define COIL_MIDDLE_COMPENSATION 85
@@ -25,7 +26,9 @@ void setupPortAndPlotter();
 void readCoilValuesInLoop();
 int calculatePeriod();
 void manualCoilControl();
+void coilControl();
 void initMotorTimer();
+void handleMotorControl();
 
 int coilAValue;
 int coilBValue;
@@ -45,6 +48,7 @@ long pendelTimerStart = 0;
 long pendelTimerValue;
 unsigned long lastTouchA;
 unsigned long lastTouchB;
+unsigned long lastSwitchOn;
 int comparePosition;
 long passage;
 long meanPassage;
@@ -60,6 +64,7 @@ void setup()
   readMeanVoltage();
   // readCoilValuesInLoop();
   // manualCoilControl();
+  coilControl();
 
   period = calculatePeriod();
 
@@ -75,13 +80,81 @@ void setup()
 #endif
 }
 
+void handleCoilA(unsigned long millis)
+{
+  coilAValue = analogRead(A0); // Lese CoilA Spannung
+  if (lastSwitchOn == 0)
+  {
+    if (coilAValue < (meanCoilA - 8)) // Magnet über CoilA ?
+    {
+      if (lastTouchB > lastTouchA)
+      {
+        Serial.print("CoilA pass: ");
+        Serial.println(millis - lastTouchA);
+      }
+      else if ((millis - lastTouchA) > OUTER_PENDEL_DELAY)
+      {
+        // digitalWrite(PinCoilB, HIGH);
+        Serial.println("CoilB ON: ");
+        lastSwitchOn = millis;
+      }
+      lastTouchA = millis;
+    }
+  }
+}
+
+void handleCoilB(unsigned long millis)
+{
+  coilBValue = analogRead(A1); // Lese CoilB Spannung
+  if (lastSwitchOn == 0)
+  {
+    if (coilBValue < (meanCoilB - 8)) // ist Pendel über CoilB ?
+    {
+      if (lastTouchA > lastTouchB)
+      {
+        Serial.print("CoilB pass: ");
+        Serial.println(millis - lastTouchB);
+      }
+      else if ((millis - lastTouchB) > OUTER_PENDEL_DELAY)
+      {
+        // digitalWrite(PinCoilA, HIGH);
+        Serial.println("CoilA ON: ");
+        lastSwitchOn = millis;
+      }
+      lastTouchB = millis;
+    }
+  }
+}
+
+void switchOffBothCoils(unsigned long millis)
+{
+  if (lastSwitchOn > 0 && (millis - lastSwitchOn) > COIL_ON_TIME)
+  {
+    Serial.println("All switched Off");
+    PORTD = (PORTD & 0xF3); // PinCoilA und PinCoilB ausschalten
+    lastSwitchOn = 0;
+  }
+}
+
 void loop()
+{
+  unsigned long currentMillis;
+
+  currentMillis = millis();
+
+  switchOffBothCoils(currentMillis);
+
+  handleCoilA(currentMillis);
+  handleCoilB(currentMillis);
+}
+
+void loopOriginal()
 {
   long delta1;
   long delta2;
-  unsigned long CurrentMillis;
+  unsigned long currentMillis;
 
-  CurrentMillis = millis();
+  currentMillis = millis();
 
   /******************************************/
   /* Behandle Coil A                          */
@@ -91,12 +164,12 @@ void loop()
   {
     if (coilAValue < (meanCoilA - 8)) // Magnet über CoilA ?
     {
-      delta1 = CurrentMillis - lastTouchA;
-      lastTouchA = CurrentMillis;
+      delta1 = currentMillis - lastTouchA;
+      lastTouchA = currentMillis;
       if (delta1 > (period >> 1))
       {
         digitalWrite(PinCoilB, HIGH);
-        pendelTimerStart = CurrentMillis;
+        pendelTimerStart = currentMillis;
         passage = (lastTouchA - lastTouchB) >> 1;
         if (!isMotorRunning)
         {                                        // Berechne die Varianz der Passage, um stabilität des Pendulums zu eruieren
@@ -114,53 +187,7 @@ void loop()
       }
       else // delta1 < (Period >> 1)
       {
-        if (isMotorControl == true)
-        {
-          isMotorControl = false;
-          if (isMotorRunning)
-          {
-            if (motorPosition > comparePosition)
-            {
-              motorTimerValue = motorTimerValue + 1;
-              Timer1.setPeriod(motorTimerValue >> 2);
-            }
-            if (motorPosition < comparePosition)
-            {
-              stepper();
-              motorTimerValue = motorTimerValue - 1;
-              Timer1.setPeriod(motorTimerValue >> 2);
-            }
-#ifdef Monitor
-            Serial.print(motorPosition);
-            Serial.print(",");
-            Serial.println(motorTimerValue >> 2);
-#endif
-          }
-          else //  if (!isMotorRunning)
-          {
-            if (varianzPassage < 100) // Warte, bis Pendel stabil schwingt, befor Motor gestartet wird
-            {
-#ifndef PlotterOutput
-              isMotorRunning = true;
-              motorPosition = MOTOR_START_POS;              // Hier müssen wir bei dem nächsten Transit wieder hin!
-              passage = passage + COIL_MIDDLE_COMPENSATION; // Bei Motorstart erstmalig die Kompensation berücksichtigen
-              direction = 1;
-              delay(passage);                                                            // Warte, bis Pendel im Transit ist
-              Timer1.attachInterrupt(stepper);                                           // Und starte motor
-              comparePosition = motorPosition - (int)(((long)(passage << 10)) / period); // Theoretische Motor Position kurz vorher, als Pendel über CoilA war
-#endif
-
-#ifdef Monitor
-              Serial.println(" ");
-              Serial.println("Motor Started");
-              Serial.println("comparePosition");
-              Serial.print(comparePosition);
-              Serial.println(" ");
-              Serial.println("comparePosition  motorTimerValue");
-#endif
-            }
-          }
-        }
+        handleMotorControl();
       }
     }
   }
@@ -173,12 +200,12 @@ void loop()
   {
     if (coilBValue < (meanCoilB - 8)) // ist Pendel über CoilB ?
     {
-      delta1 = CurrentMillis - lastTouchB;
-      lastTouchB = CurrentMillis;
+      delta1 = currentMillis - lastTouchB;
+      lastTouchB = currentMillis;
       if (delta1 > (period >> 1))
       {
         digitalWrite(PinCoilA, HIGH);
-        pendelTimerStart = CurrentMillis;
+        pendelTimerStart = currentMillis;
       }
       else
         isMotorControl = true;
@@ -190,7 +217,7 @@ void loop()
   /******************************************/
   if (pendelTimerStart > 0)
   {
-    pendelTimerValue = CurrentMillis - pendelTimerStart;
+    pendelTimerValue = currentMillis - pendelTimerStart;
     if (pendelTimerValue > COIL_RELAX_TIME)
       pendelTimerStart = 0; // Stoppe timer und ermögliche Sensornutzung der Spulen
     else
@@ -216,66 +243,118 @@ void loop()
   delay(LOOP_DELAY);
 }
 
+void handleMotorControl()
+{
+  if (isMotorControl == true)
+  {
+    isMotorControl = false;
+    if (isMotorRunning)
+    {
+      if (motorPosition > comparePosition)
+      {
+        motorTimerValue = motorTimerValue + 1;
+        Timer1.setPeriod(motorTimerValue >> 2);
+      }
+      if (motorPosition < comparePosition)
+      {
+        stepper();
+        motorTimerValue = motorTimerValue - 1;
+        Timer1.setPeriod(motorTimerValue >> 2);
+      }
+#ifdef Monitor
+      Serial.print(motorPosition);
+      Serial.print(",");
+      Serial.println(motorTimerValue >> 2);
+#endif
+    }
+    else //  if (!isMotorRunning)
+    {
+      if (varianzPassage < 100) // Warte, bis Pendel stabil schwingt, befor Motor gestartet wird
+      {
+#ifndef PlotterOutput
+        isMotorRunning = true;
+        motorPosition = MOTOR_START_POS;              // Hier müssen wir bei dem nächsten Transit wieder hin!
+        passage = passage + COIL_MIDDLE_COMPENSATION; // Bei Motorstart erstmalig die Kompensation berücksichtigen
+        direction = 1;
+        delay(passage);                                                            // Warte, bis Pendel im Transit ist
+        Timer1.attachInterrupt(stepper);                                           // Und starte motor
+        comparePosition = motorPosition - (int)(((long)(passage << 10)) / period); // Theoretische Motor Position kurz vorher, als Pendel über CoilA war
+#endif
+
+#ifdef Monitor
+        Serial.println(" ");
+        Serial.println("Motor Started");
+        Serial.println("comparePosition");
+        Serial.print(comparePosition);
+        Serial.println(" ");
+        Serial.println("comparePosition  motorTimerValue");
+#endif
+      }
+    }
+  }
+}
+
 /******************************************/
 /* ISR Schrittmotor                            */
 /******************************************/
 void stepper() // Interrupt Routine, die von Timer 1 alle x Microsekunden (motorTimerValue) aufgerrufen wird.
 {
-  static byte Steps;
-  static byte Pause;
-  if (!isMotorDelay)
-  {
-    if ((motorPosition != MOTOR_START_POS) || (Pause == 0)) // Sind wir nicht im Transit?
-    {                                                       // dann Motor weiterdrehen
-      digitalWrite(LED, LOW);                               // Stroboskop LED ausschalten
-      Steps = (Steps + direction) & 0x07;
-      motorPosition = (motorPosition + (int)direction);
-      motorPosition = motorPosition & 0x01FF; // Wir werten nur die relative motor position aus
-      Pause = pauseAtTransit;                 // Pausenlänge im Transit in "IR counts"
-      switch (Steps)
-      {
-      case 0:
-        PORTB = (PORTB & 0xf0) | B00001000;
-        break;
-      case 1:
-        PORTB = (PORTB & 0xf0) | B00001100;
-        break;
-      case 2:
-        PORTB = (PORTB & 0xf0) | B00000100;
-        break;
-      case 3:
-        PORTB = (PORTB & 0xf0) | B00000110;
-        break;
-      case 4:
-        PORTB = (PORTB & 0xf0) | B00000010;
-        break;
-      case 5:
-        PORTB = (PORTB & 0xf0) | B00000011;
-        break;
-      case 6:
-        PORTB = (PORTB & 0xf0) | B00000001;
-        break;
-      case 7:
-        PORTB = (PORTB & 0xf0) | B00001001;
-      }
-    }
-    if (motorPosition == MOTOR_START_POS) // in TransitPosition!!!
+  /*   static byte Steps;
+    static byte Pause;
+    if (!isMotorDelay)
     {
-      digitalWrite(LED, HIGH); // Schalte Stoboskop LED ein
-      if (Pause > 0)
-        Pause = Pause - 1; // Pause im Transit
-      if (isShutdown)      // Wenn Shutdown gewünscht:
+      if ((motorPosition != MOTOR_START_POS) || (Pause == 0)) // Sind wir nicht im Transit?
+      {                                                       // dann Motor weiterdrehen
+        digitalWrite(LED, LOW);                               // Stroboskop LED ausschalten
+        Steps = (Steps + direction) & 0x07;
+        motorPosition = (motorPosition + (int)direction);
+        motorPosition = motorPosition & 0x01FF; // Wir werten nur die relative motor position aus
+        Pause = pauseAtTransit;                 // Pausenlänge im Transit in "IR counts"
+        switch (Steps)
+        {
+        case 0:
+          PORTB = (PORTB & 0xf0) | B00001000;
+          break;
+        case 1:
+          PORTB = (PORTB & 0xf0) | B00001100;
+          break;
+        case 2:
+          PORTB = (PORTB & 0xf0) | B00000100;
+          break;
+        case 3:
+          PORTB = (PORTB & 0xf0) | B00000110;
+          break;
+        case 4:
+          PORTB = (PORTB & 0xf0) | B00000010;
+          break;
+        case 5:
+          PORTB = (PORTB & 0xf0) | B00000011;
+          break;
+        case 6:
+          PORTB = (PORTB & 0xf0) | B00000001;
+          break;
+        case 7:
+          PORTB = (PORTB & 0xf0) | B00001001;
+        }
+      }
+      if (motorPosition == MOTOR_START_POS) // in TransitPosition!!!
       {
-        PORTB = (PORTB & 0xD0); // Motor und LED ausschalten
-        PORTD = (PORTD & 0xF3); // Spulen ebenfalls ausschalten
-        Timer1.detachInterrupt();
-        while (1)
-          ; // Wir warten auf "Power loss"
+        digitalWrite(LED, HIGH); // Schalte Stoboskop LED ein
+        if (Pause > 0)
+          Pause = Pause - 1; // Pause im Transit
+        if (isShutdown)      // Wenn Shutdown gewünscht:
+        {
+          PORTB = (PORTB & 0xD0); // Motor und LED ausschalten
+          PORTD = (PORTD & 0xF3); // Spulen ebenfalls ausschalten
+          Timer1.detachInterrupt();
+          while (1)
+            ; // Wir warten auf "Power loss"
+        }
       }
     }
-  }
-  else // Eine kurze Pause für den Motor
-    isMotorDelay = false;
+    else // Eine kurze Pause für den Motor
+      isMotorDelay = false;
+   */
 }
 
 /******************************************/
@@ -315,6 +394,41 @@ byte CheckButtons()
       stepper();
   }
   return (bool)button1 + (bool)button2; // 0: no press, 1: one key, 2: both keys
+}
+
+void doLog()
+{
+  coilAValue = analogRead(A0);
+  coilBValue = analogRead(A1);
+  Serial.print("MeanCoil A/B: ");
+  Serial.print(coilAValue);
+  Serial.print(" / ");
+  Serial.print(coilBValue);
+  Serial.print(" t=");
+  Serial.println(millis());
+}
+void coilControl()
+{
+  int coilOnTime = 80;
+  int offTime = 1220 / 2 - 2 * coilOnTime;
+
+  do
+  {
+    digitalWrite(PinCoilA, HIGH);
+    delay(coilOnTime);
+    doLog();
+    digitalWrite(PinCoilA, LOW);
+    delay(offTime);
+    doLog();
+
+    digitalWrite(PinCoilB, HIGH);
+    delay(coilOnTime);
+    doLog();
+    digitalWrite(PinCoilB, LOW);
+    delay(offTime);
+    doLog();
+
+  } while (1);
 }
 
 void manualCoilControl()
@@ -410,7 +524,7 @@ int calculatePeriod()
     }
 
 #ifdef Monitor
-    Serial.print("coilBTouche ");
+    Serial.print("coilBTouches ");
     Serial.print(i);
     Serial.print(" ");
     Serial.println(coilBTouches[i]);
