@@ -14,8 +14,8 @@
 #define COIL_MIDDLE_COMPENSATION 85
 #define MOTOR_TIMER_VALUE 0 // Wenn bekannt: Wert hier eintragen
 
-#define Monitor
-// #define PlotterOutput
+// #define Monitor
+#define PlotterOutput
 
 void stepper();      // ISR für den Schrittmotor
 byte CheckButtons(); // Tasten eingabe
@@ -29,6 +29,7 @@ void manualCoilControl();
 void coilControl();
 void initMotorTimer();
 void handleMotorControl();
+void plotCoilValues();
 
 int coilAValue;
 int coilBValue;
@@ -64,7 +65,7 @@ void setup()
   readMeanVoltage();
   // readCoilValuesInLoop();
   // manualCoilControl();
-  coilControl();
+  // coilControl();
 
   period = calculatePeriod();
 
@@ -94,7 +95,7 @@ void handleCoilA(unsigned long millis)
       }
       else if ((millis - lastTouchA) > OUTER_PENDEL_DELAY)
       {
-        // digitalWrite(PinCoilB, HIGH);
+        digitalWrite(PinCoilB, HIGH);
         Serial.println("CoilB ON: ");
         lastSwitchOn = millis;
       }
@@ -117,7 +118,7 @@ void handleCoilB(unsigned long millis)
       }
       else if ((millis - lastTouchB) > OUTER_PENDEL_DELAY)
       {
-        // digitalWrite(PinCoilA, HIGH);
+        digitalWrite(PinCoilA, HIGH);
         Serial.println("CoilA ON: ");
         lastSwitchOn = millis;
       }
@@ -146,6 +147,7 @@ void loop()
 
   handleCoilA(currentMillis);
   handleCoilB(currentMillis);
+  // plotCoilValues();
 }
 
 void loopOriginal()
@@ -409,8 +411,8 @@ void doLog()
 }
 void coilControl()
 {
-  int coilOnTime = 80;
-  int offTime = 1220 / 2 - 2 * coilOnTime;
+  int coilOnTime = 40;
+  int offTime = 1225 / 2 - 2 * coilOnTime;
 
   do
   {
@@ -491,19 +493,22 @@ void setupPortAndPlotter()
   Serial.begin(9600);
 #ifdef PlotterOutput
   p.Begin(); // start plotter
-  p.AddTimeGraph("Spannung coilAValue", 1500, "CoilA", coilAValue, "CoilB", coilBValue);
+  p.AddTimeGraph("Spannung coilAValue", 400, "CoilA", coilAValue, "CoilB", coilBValue);
 #endif
+}
+
+void plotCoilValues()
+{
+  coilAValue = analogRead(A0);
+  coilBValue = analogRead(A1);
+  delay(3);
 }
 
 void readCoilValuesInLoop()
 {
   do
   {
-    coilAValue = analogRead(A0);
-    coilBValue = analogRead(A1);
-    delay(3);
-    plot();
-    printCoilValues(coilAValue, coilBValue);
+    plotCoilValues();
   } while (1);
 }
 
