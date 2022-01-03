@@ -2,20 +2,23 @@
 
 #include "TimerOne.h"
 #include "Plotter.h"
+#include "StateMachine.h"
 
 #define PinCoilA 2
 #define PinCoilB 3
 #define LED 13
 #define LOOP_DELAY 3
-#define COIL_ON_TIME 5000
+#define COIL_ON_TIME 100
+#define COIL_RELAX_TIME 150
 #define OUTER_PENDEL_DELAY 150
-#define COIL_RELAX_TIME 250
 #define MOTOR_START_POS 360 // so wählen, dass comparePosition ~250 ist
 #define COIL_MIDDLE_COMPENSATION 85
 #define MOTOR_TIMER_VALUE 0 // Wenn bekannt: Wert hier eintragen
 
-// #define Monitor
-#define PlotterOutput
+const int STATE_DELAY = 3;
+
+#define Monitor
+// #define PlotterOutput
 
 void stepper();      // ISR für den Schrittmotor
 byte CheckButtons(); // Tasten eingabe
@@ -30,6 +33,15 @@ void coilControl();
 void initMotorTimer();
 void handleMotorControl();
 void plotCoilValues();
+void switchOffBothCoils();
+void switchOnCoilB();
+void switchOnCoilA();
+void enterExternalState();
+void enterInternalState();
+bool detectCoilAPass();
+bool detectCoilBPass();
+bool checkOnTime();
+bool checkCoilRelaxTime();
 
 int coilAValue;
 int coilBValue;
@@ -50,6 +62,7 @@ long pendelTimerValue;
 unsigned long lastTouchA;
 unsigned long lastTouchB;
 unsigned long lastSwitchOn;
+unsigned long startOfCoilRelaxTime;
 int comparePosition;
 long passage;
 long meanPassage;
@@ -58,6 +71,13 @@ byte direction = 1;
 bool isMotorControl = false;
 bool isMotorDelay = false;
 bool isShutdown = false;
+
+StateMachine machine = StateMachine();
+
+State *EXTERNAL_PASS = machine.addState(&enterExternalState);
+State *COIL_B_ON = machine.addState(&switchOnCoilB);
+State *COIL_A_ON = machine.addState(&switchOnCoilA);
+State *INTERNAL_PASS = machine.addState(&enterInternalState);
 
 void setup()
 {
@@ -68,7 +88,6 @@ void setup()
   // coilControl();
 
   period = calculatePeriod();
-
   initMotorTimer();
 
 #ifdef Monitor
@@ -79,75 +98,117 @@ void setup()
   Serial.println("");
   Serial.println("PassageTime  Varianz");
 #endif
-}
 
-void handleCoilA(unsigned long millis)
-{
-  coilAValue = analogRead(A0); // Lese CoilA Spannung
-  if (lastSwitchOn == 0)
-  {
-    if (coilAValue < (meanCoilA - 8)) // Magnet über CoilA ?
-    {
-      if (lastTouchB > lastTouchA)
-      {
-        Serial.print("CoilA pass: ");
-        Serial.println(millis - lastTouchA);
-      }
-      else if ((millis - lastTouchA) > OUTER_PENDEL_DELAY)
-      {
-        digitalWrite(PinCoilB, HIGH);
-        Serial.println("CoilB ON: ");
-        lastSwitchOn = millis;
-      }
-      lastTouchA = millis;
-    }
-  }
-}
+  EXTERNAL_PASS->addTransition(&detectCoilAPass, COIL_B_ON);
+  EXTERNAL_PASS->addTransition(&detectCoilBPass, COIL_A_ON);
+  COIL_A_ON->addTransition(&checkOnTime, INTERNAL_PASS);
+  COIL_B_ON->addTransition(&checkOnTime, INTERNAL_PASS);
+  INTERNAL_PASS->addTransition(&checkCoilRelaxTime, EXTERNAL_PASS);
 
-void handleCoilB(unsigned long millis)
-{
-  coilBValue = analogRead(A1); // Lese CoilB Spannung
-  if (lastSwitchOn == 0)
-  {
-    if (coilBValue < (meanCoilB - 8)) // ist Pendel über CoilB ?
-    {
-      if (lastTouchA > lastTouchB)
-      {
-        Serial.print("CoilB pass: ");
-        Serial.println(millis - lastTouchB);
-      }
-      else if ((millis - lastTouchB) > OUTER_PENDEL_DELAY)
-      {
-        digitalWrite(PinCoilA, HIGH);
-        Serial.println("CoilA ON: ");
-        lastSwitchOn = millis;
-      }
-      lastTouchB = millis;
-    }
-  }
-}
-
-void switchOffBothCoils(unsigned long millis)
-{
-  if (lastSwitchOn > 0 && (millis - lastSwitchOn) > COIL_ON_TIME)
-  {
-    Serial.println("All switched Off");
-    PORTD = (PORTD & 0xF3); // PinCoilA und PinCoilB ausschalten
-    lastSwitchOn = 0;
-  }
+  machine.transitionTo(EXTERNAL_PASS);
 }
 
 void loop()
 {
   unsigned long currentMillis;
-
   currentMillis = millis();
 
-  switchOffBothCoils(currentMillis);
+  machine.run();
+  delay(STATE_DELAY);
 
-  handleCoilA(currentMillis);
-  handleCoilB(currentMillis);
+  // switchOffBothCoils();
+  // detectCoilAPass(currentMillis);
+  // detectCoilBPass(currentMillis);
   // plotCoilValues();
+}
+
+void enterExternalState()
+{
+  if (machine.executeOnce)
+  {
+    Serial.println("enterExternalState:");
+    switchOffBothCoils();
+    startOfCoilRelaxTime = 0;
+  }
+}
+
+void enterInternalState()
+{
+  if (machine.executeOnce)
+  {
+    Serial.println("enterInternalState:");
+    switchOffBothCoils();
+    lastSwitchOn = 0;
+    startOfCoilRelaxTime = millis();
+  }
+}
+
+void switchOnCoilA()
+{
+  if (machine.executeOnce)
+  {
+    digitalWrite(PinCoilA, HIGH);
+    Serial.println("CoilA ON: ");
+    lastSwitchOn = millis;
+  }
+}
+
+void switchOnCoilB()
+{
+  if (machine.executeOnce)
+  {
+    digitalWrite(PinCoilB, HIGH);
+    Serial.println("CoilB ON: ");
+    lastSwitchOn = millis;
+  }
+}
+
+bool checkOnTime()
+{
+  if ((millis() - lastSwitchOn) > COIL_ON_TIME)
+  {
+    return true;
+  }
+  return false;
+}
+
+bool checkCoilRelaxTime()
+{
+  if ((millis() - startOfCoilRelaxTime) > COIL_RELAX_TIME)
+  {
+    return true;
+  }
+  return false;
+}
+
+bool detectCoilAPass()
+{
+  coilAValue = analogRead(A0);      // Lese CoilA Spannung
+  if (coilAValue < (meanCoilA - 8)) // Magnet über CoilA ?
+  {
+    Serial.print("CoilA pass: ");
+    Serial.println(millis() - lastTouchA);
+    return true;
+  }
+  return false;
+}
+
+bool detectCoilBPass()
+{
+  coilBValue = analogRead(A1);      // Lese CoilB Spannung
+  if (coilBValue < (meanCoilB - 8)) // ist Pendel über CoilB ?
+  {
+    Serial.print("CoilB pass: ");
+    Serial.println(millis() - lastTouchB);
+    return true;
+  }
+  return false;
+}
+
+void switchOffBothCoils()
+{
+  Serial.println("All switched Off");
+  PORTD = (PORTD & 0xF3); // PinCoilA und PinCoilB ausschalten
 }
 
 void loopOriginal()
