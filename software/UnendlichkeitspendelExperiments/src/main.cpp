@@ -8,11 +8,15 @@
 #define PinCoilB 3
 #define LED 13
 #define LOOP_DELAY 3
-#define COIL_ON_TIME 100
-#define COIL_RELAX_TIME 200
+#define VOLTAGE_DIFF_THRESHOLD 15
+#define COIL_ENABLED true
+#define INITIAL_COIL_ON_TIME 190
+#define MINIMAL_COIL_ON_TIME 85
+#define COIL_RELAX_TIME 100
 #define MOTOR_START_POS 360 // so wählen, dass comparePosition ~250 ist
 #define COIL_MIDDLE_COMPENSATION 85
 #define MOTOR_TIMER_VALUE 0 // Wenn bekannt: Wert hier eintragen
+#define COIL_MEAN_VALUE 454
 
 const int STATE_DELAY = 3;
 
@@ -41,12 +45,14 @@ bool detectCoilAPass();
 bool detectCoilBPass();
 bool checkOnTime();
 bool checkCoilRelaxTime();
+void adjustCoilTime();
 
 int coilAValue;
 int coilBValue;
 int meanCoilA;
 int meanCoilB;
 int period;
+int coilOnTime;
 
 byte pauseAtTransit = 0;
 
@@ -55,6 +61,7 @@ Plotter p; // create plotter
 int motorTimerValue = MOTOR_TIMER_VALUE;
 int motorPosition; // Motor Position beim Transit
 bool isMotorRunning = false;
+bool isCoilTimeAutoAdjust = true;
 
 long pendelTimerStart = 0;
 long pendelTimerValue;
@@ -81,13 +88,16 @@ State *INTERNAL_PASS = machine.addState(&enterInternalState);
 void setup()
 {
   setupPortAndPlotter();
-  readMeanVoltage();
+  meanCoilA = COIL_MEAN_VALUE;
+  meanCoilB = COIL_MEAN_VALUE;
+  // readMeanVoltage();
   // readCoilValuesInLoop();
   // manualCoilControl();
   // coilControl();
 
-  period = calculatePeriod();
+  // period = calculatePeriod();
   initMotorTimer();
+  coilOnTime = INITIAL_COIL_ON_TIME;
 
 #ifdef Monitor
   Serial.print("Periode=");
@@ -136,12 +146,14 @@ void enterInternalState()
     switchOffBothCoils();
     lastSwitchOn = 0;
     startOfCoilRelaxTime = millis();
+
+    adjustCoilTime();
   }
 }
 
 void switchOnCoilA()
 {
-  if (machine.executeOnce)
+  if (machine.executeOnce && COIL_ENABLED)
   {
     digitalWrite(PinCoilA, HIGH);
     Serial.println("CoilA ON: ");
@@ -151,7 +163,7 @@ void switchOnCoilA()
 
 void switchOnCoilB()
 {
-  if (machine.executeOnce)
+  if (machine.executeOnce && COIL_ENABLED)
   {
     digitalWrite(PinCoilB, HIGH);
     Serial.println("CoilB ON: ");
@@ -161,7 +173,7 @@ void switchOnCoilB()
 
 bool checkOnTime()
 {
-  if ((millis() - lastSwitchOn) > COIL_ON_TIME)
+  if ((millis() - lastSwitchOn) > coilOnTime)
   {
     return true;
   }
@@ -180,7 +192,7 @@ bool checkCoilRelaxTime()
 bool detectCoilAPass()
 {
   coilAValue = analogRead(A0);      // Lese CoilA Spannung
-  if (coilAValue < (meanCoilA - 8)) // Magnet über CoilA ?
+  if (coilAValue < (meanCoilA - VOLTAGE_DIFF_THRESHOLD)) // Magnet über CoilA ?
   {
     Serial.print("CoilA pass: ");
     Serial.println(millis() - lastTouchA);
@@ -192,7 +204,7 @@ bool detectCoilAPass()
 bool detectCoilBPass()
 {
   coilBValue = analogRead(A1);      // Lese CoilB Spannung
-  if (coilBValue < (meanCoilB - 8)) // ist Pendel über CoilB ?
+  if (coilBValue < (meanCoilB - VOLTAGE_DIFF_THRESHOLD)) // ist Pendel über CoilB ?
   {
     Serial.print("CoilB pass: ");
     Serial.println(millis() - lastTouchB);
@@ -205,6 +217,24 @@ void switchOffBothCoils()
 {
   Serial.println("All switched Off");
   PORTD = (PORTD & 0xF3); // PinCoilA und PinCoilB ausschalten
+}
+
+void adjustCoilTime() {
+    if (coilOnTime > MINIMAL_COIL_ON_TIME && isCoilTimeAutoAdjust == true)
+    {
+      coilOnTime -= 1;
+    }
+    else
+    {
+      isCoilTimeAutoAdjust = false;
+      if (digitalRead(5) == HIGH)
+        coilOnTime += 1;
+
+      if (digitalRead(6) == HIGH)
+        coilOnTime -= 1;
+    }
+    Serial.print("coilOnTime: ");
+    Serial.println(coilOnTime);
 }
 
 void loopOriginal()
@@ -221,7 +251,7 @@ void loopOriginal()
   coilAValue = analogRead(A0); // Lese CoilA Spannung
   if (pendelTimerStart == 0)   // Wenn CoilA nicht gefeuert hat, dann:
   {
-    if (coilAValue < (meanCoilA - 8)) // Magnet über CoilA ?
+    if (coilAValue < (meanCoilA - VOLTAGE_DIFF_THRESHOLD)) // Magnet über CoilA ?
     {
       delta1 = currentMillis - lastTouchA;
       lastTouchA = currentMillis;
@@ -257,7 +287,7 @@ void loopOriginal()
   coilBValue = analogRead(A1); // Lese CoilB Spannung
   if (pendelTimerStart == 0)   // Wenn CoilB nicht gefeuert hat, dann:
   {
-    if (coilBValue < (meanCoilB - 8)) // ist Pendel über CoilB ?
+    if (coilBValue < (meanCoilB - VOLTAGE_DIFF_THRESHOLD)) // ist Pendel über CoilB ?
     {
       delta1 = currentMillis - lastTouchB;
       lastTouchB = currentMillis;
@@ -281,7 +311,7 @@ void loopOriginal()
       pendelTimerStart = 0; // Stoppe timer und ermögliche Sensornutzung der Spulen
     else
     {
-      if (pendelTimerValue > COIL_ON_TIME)
+      if (pendelTimerValue > coilOnTime)
         PORTD = (PORTD & 0xF3); // PinCoilA und PinCoilB ausschalten
     }
   }
@@ -571,17 +601,17 @@ void readCoilValuesInLoop()
 
 int calculatePeriod()
 {
-  long coilBTouches[8];
+  long coilBTouches[VOLTAGE_DIFF_THRESHOLD];
 
-  for (int i = 0; i < 8; i++)
+  for (int i = 0; i < VOLTAGE_DIFF_THRESHOLD; i++)
   {
     int valB = analogRead(A1);
-    while (analogRead(A1) < (meanCoilB + 8))
+    while (analogRead(A1) < (meanCoilB + VOLTAGE_DIFF_THRESHOLD))
     { // Magnet ist über CoilA
       valB = analogRead(A1);
     }
     coilBTouches[i] = millis();
-    while (analogRead(A1) > (meanCoilB - 8))
+    while (analogRead(A1) > (meanCoilB - VOLTAGE_DIFF_THRESHOLD))
     { // Warte bis Magnet weg ist
     }
 
