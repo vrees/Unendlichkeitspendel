@@ -9,8 +9,7 @@
 #define LED 13
 #define LOOP_DELAY 3
 #define COIL_ON_TIME 100
-#define COIL_RELAX_TIME 150
-#define OUTER_PENDEL_DELAY 150
+#define COIL_RELAX_TIME 200
 #define MOTOR_START_POS 360 // so wählen, dass comparePosition ~250 ist
 #define COIL_MIDDLE_COMPENSATION 85
 #define MOTOR_TIMER_VALUE 0 // Wenn bekannt: Wert hier eintragen
@@ -110,9 +109,6 @@ void setup()
 
 void loop()
 {
-  unsigned long currentMillis;
-  currentMillis = millis();
-
   machine.run();
   delay(STATE_DELAY);
 
@@ -149,7 +145,7 @@ void switchOnCoilA()
   {
     digitalWrite(PinCoilA, HIGH);
     Serial.println("CoilA ON: ");
-    lastSwitchOn = millis;
+    lastSwitchOn = millis();
   }
 }
 
@@ -159,7 +155,7 @@ void switchOnCoilB()
   {
     digitalWrite(PinCoilB, HIGH);
     Serial.println("CoilB ON: ");
-    lastSwitchOn = millis;
+    lastSwitchOn = millis();
   }
 }
 
